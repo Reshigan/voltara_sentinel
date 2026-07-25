@@ -1,0 +1,11 @@
+{
+  "name": "build-spec-summary-voltara-is-a-self-con",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.0.0",
+    "wrangler": "^4.0.0"
+  }
+}
