@@ -1,7 +1,7 @@
 -- GENERATED seed (skipped in tests, applied on deploy).
-INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('North Substation', 'North', 500, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
-INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('South Depot', 'South', 350, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
-INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('East Industrial', 'East', 800, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
+INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('North Substation', 'NORTH', 500, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
+INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('South Depot', 'SOUTH', 350, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
+INSERT INTO sites (name, region, capacity_kw, created_at, updated_at) VALUES ('East Industrial', 'EAST', 800, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
 INSERT INTO tariffs (name, rate_per_kwh, band, created_at, updated_at) VALUES ('Off-Peak Basic', 0.08, 'OFF_PEAK', '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
 INSERT INTO tariffs (name, rate_per_kwh, band, created_at, updated_at) VALUES ('Peak Industrial', 0.15, 'PEAK', '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
 INSERT INTO meters (serial, site_id, kind, status, tariff_id, created_at, updated_at) VALUES ('MTR001', 1, 'ELECTRIC', 'ACTIVE', 1, '2025-01-15T08:00:00Z', '2025-01-15T08:00:00Z');
