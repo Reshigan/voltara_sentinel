@@ -3,7 +3,7 @@ import { json } from "../lib/http";
 
 export type DigestHandler = (
   req: Request,
-  env: Env
+  env: Env,
 ) => Promise<Response>;
 
 interface DigestRow {
@@ -28,10 +28,10 @@ export const getDigest: DigestHandler = async (_req, env) => {
 
   const summary = await env.DB.prepare(
     `SELECT
-      COALESCE((SELECT SUM(r.kwh) FROM reading r WHERE r.taken_at >= ?), 0) AS total_kwh,
-      COALESCE((SELECT MAX(r.demand_kw) FROM reading r WHERE r.taken_at >= ?), 0) AS peak_demand_kw,
-      COALESCE((SELECT COUNT(*) FROM alert a WHERE a.opened_at >= ?), 0) AS new_alerts,
-      COALESCE((SELECT COUNT(*) FROM alert a WHERE a.acknowledged_at >= ?), 0) AS acknowledged_alerts`
+      COALESCE((SELECT SUM(r.kwh) FROM readings r WHERE r.taken_at >= ?), 0) AS total_kwh,
+      COALESCE((SELECT MAX(r.demand_kw) FROM readings r WHERE r.taken_at >= ?), 0) AS peak_demand_kw,
+      COALESCE((SELECT COUNT(*) FROM alerts a WHERE a.opened_at >= ?), 0) AS new_alerts,
+      COALESCE((SELECT COUNT(*) FROM alerts a WHERE a.acknowledged_at >= ?), 0) AS acknowledged_alerts`,
   )
     .bind(since, since, since, since)
     .first<DigestRow>();
@@ -46,31 +46,31 @@ export const getDigest: DigestHandler = async (_req, env) => {
         top_sites: [],
         critical_sites: [],
       },
-      200
+      200,
     );
   }
 
   const topSites = await env.DB.prepare(
     `SELECT s.name, COALESCE(SUM(r.kwh), 0) AS kwh
-     FROM site s
-     JOIN meter m ON m.site_id = s.id
-     JOIN reading r ON r.meter_id = m.id
+     FROM sites s
+     JOIN meters m ON m.site_id = s.id
+     JOIN readings r ON r.meter_id = m.id
      WHERE r.taken_at >= ?
      GROUP BY s.id
      ORDER BY kwh DESC
-     LIMIT 3`
+     LIMIT 3`,
   )
     .bind(since)
     .all<TopSite>();
 
   const criticalSites = await env.DB.prepare(
     `SELECT s.name, COUNT(*) AS alert_count
-     FROM site s
-     JOIN meter m ON m.site_id = s.id
-     JOIN alert a ON a.meter_id = m.id
+     FROM sites s
+     JOIN meters m ON m.site_id = s.id
+     JOIN alerts a ON a.meter_id = m.id
      WHERE a.severity = 'CRITICAL' AND a.status = 'OPEN'
      GROUP BY s.id
-     ORDER BY alert_count DESC`
+     ORDER BY alert_count DESC`,
   )
     .all<CriticalSite>();
 
@@ -83,6 +83,6 @@ export const getDigest: DigestHandler = async (_req, env) => {
       top_sites: topSites.results ?? [],
       critical_sites: criticalSites.results ?? [],
     },
-    200
+    200,
   );
 };

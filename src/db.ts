@@ -1,3 +1,4 @@
+import { createDb } from "./lib/db";
 import type { D1Database, D1Result } from "@cloudflare/workers-types";
 
 export type Env = {
@@ -5,6 +6,10 @@ export type Env = {
 };
 
 export type Row = Record<string, unknown>;
+
+export function buildDb(): D1Database {
+  return createDb() as unknown as D1Database;
+}
 
 export async function query<T = Row>(
   db: D1Database,
