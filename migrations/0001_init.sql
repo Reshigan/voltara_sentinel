@@ -1,3 +1,8 @@
+CREATE TABLE IF NOT EXISTS _migrations (
+  file TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS site (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
