@@ -1,14 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Env } from "../lib/http";
-import { seedDatabase, createRequest, uuidPattern, isoPattern } from "../test/helpers";
+import { seedDatabase, createRequest, uuidPattern, isoPattern } from "../lib/test";
 import app from "../index";
 
 const bindings = seedDatabase();
-const env = { DB: bindings.DB, ASSETS: bindings.ASSETS } as Env;
 
 async function fetchJson(req: Request) {
-  const res = await app.fetch(req, env);
+  const res = await app.fetch(req, bindings);
   const body = res.headers.get("content-type")?.includes("json")
     ? await res.json()
     : await res.text();
