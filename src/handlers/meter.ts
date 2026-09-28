@@ -1,49 +1,109 @@
-// GENERATED from the manifest. Do not edit.
-import { json, readJson, tenantOf } from "../lib/http";
-import type { Meter, ListMetersHandler, GetMeterHandler, CreateMeterHandler, UpdateMeterHandler, DeleteMeterHandler } from "../types";
+import type { Context } from 'hono';
+import type { DB } from '../lib/db';
+import { json, readJson } from '../lib/http';
+import { isUuid, isMeterSerial, isEnum, isOptional } from '../lib/validation';
 
-const FIELDS: [string, "text" | "integer" | "real"][] = [["serial", "text"], ["site_id", "integer"], ["kind", "text"], ["status", "text"], ["tariff_id", "integer"], ["created_at", "text"], ["updated_at", "text"]];
-function validate(body: Partial<Meter>): string | null {
-  const b = body as Record<string, unknown>;
-  for (const [name, type] of FIELDS) {
-    const v = b[name];
-    if (v === undefined || v === null || v === "") return name + " is required";
-    if (type === "text" && typeof v !== "string") return name + " must be text";
-    if (type !== "text" && typeof v !== "number") return name + " must be a number";
-    if (type === "integer" && !Number.isInteger(v)) return name + " must be a whole number";
+const PAGE_SIZE = 50;
+const KINDS = ['ELECTRIC', 'GAS', 'WATER', 'SOLAR'] as const;
+const STATUSES = ['ACTIVE', 'INACTIVE', 'FAULT'] as const;
+
+export function listMeters(c: Context, db: DB): Response {
+  const cursor = c.req.query('cursor');
+  const limit = Math.min(Number(c.req.query('limit') ?? PAGE_SIZE), PAGE_SIZE);
+
+  let rows: unknown[];
+  if (cursor && isUuid(cursor)) {
+    rows = db.prepare('SELECT * FROM meter WHERE id > ? ORDER BY id LIMIT ?').all(cursor, limit);
+  } else {
+    rows = db.prepare('SELECT * FROM meter ORDER BY id LIMIT ?').all(limit);
   }
-  return null;
+
+  const next = rows.length === limit ? (rows[rows.length - 1] as { id: string }).id : null;
+  return json({ items: rows, next });
 }
 
-export const listMeters: ListMetersHandler = async (req, env) => {
-  const { results } = await env.DB.prepare("SELECT * FROM meters WHERE tenant = ?").bind(tenantOf(req)).all<Meter>();
-  return json(results);
-};
+export function getMeter(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+  const row = db.prepare('SELECT * FROM meter WHERE id = ?').get(id);
+  return row ? json(row) : json({ error: 'not found' }, 404);
+}
 
-export const getMeter: GetMeterHandler = async (req, env, params) => {
-  const row = await env.DB.prepare("SELECT * FROM meters WHERE id = ? AND tenant = ?").bind(params.id, tenantOf(req)).first<Meter>();
-  return row ? json(row) : json({ error: "not found" }, 404);
-};
+export function createMeter(c: Context, db: DB): Response {
+  const body = readJsonSync(c);
+  if (!body) return json({ error: 'invalid body' }, 400);
 
-export const createMeter: CreateMeterHandler = async (req, env) => {
-  const body = await readJson<Partial<Meter>>(req);
-  if (!body) return json({ error: "invalid body" }, 400);
-  const invalid = validate(body);
-  if (invalid) return json({ error: invalid }, 400);
-  const res = await env.DB.prepare("INSERT INTO meters (serial, site_id, kind, status, tariff_id, created_at, updated_at, tenant) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(body.serial ?? null, body.site_id ?? null, body.kind ?? null, body.status ?? null, body.tariff_id ?? null, body.created_at ?? null, body.updated_at ?? null, tenantOf(req)).run();
-  const row = await env.DB.prepare("SELECT * FROM meters WHERE id = ?").bind(res.meta.last_row_id).first<Meter>();
-  return row ? json(row) : json({ error: "insert failed" }, 500);
-};
+  if (!isMeterSerial(body.serial)) return json({ error: 'serial must be 6-20 alphanumeric characters' }, 400);
+  if (!isUuid(body.site_id)) return json({ error: 'site_id must be a valid UUID' }, 400);
+  if (!isEnum(KINDS)(body.kind)) return json({ error: 'kind must be one of ELECTRIC, GAS, WATER, SOLAR' }, 400);
+  if (!isEnum(STATUSES)(body.status)) return json({ error: 'status must be one of ACTIVE, INACTIVE, FAULT' }, 400);
+  if (!isOptional(body.tariff_id) && !isUuid(body.tariff_id)) return json({ error: 'tariff_id must be a valid UUID or null' }, 400);
 
-export const updateMeter: UpdateMeterHandler = async (req, env, params) => {
-  const body = await readJson<Partial<Meter>>(req);
-  if (!body) return json({ error: "invalid body" }, 400);
-  await env.DB.prepare("UPDATE meters SET serial = COALESCE(?, serial), site_id = COALESCE(?, site_id), kind = COALESCE(?, kind), status = COALESCE(?, status), tariff_id = COALESCE(?, tariff_id), created_at = COALESCE(?, created_at), updated_at = COALESCE(?, updated_at) WHERE id = ? AND tenant = ?").bind(body.serial ?? null, body.site_id ?? null, body.kind ?? null, body.status ?? null, body.tariff_id ?? null, body.created_at ?? null, body.updated_at ?? null, params.id, tenantOf(req)).run();
-  const row = await env.DB.prepare("SELECT * FROM meters WHERE id = ? AND tenant = ?").bind(params.id, tenantOf(req)).first<Meter>();
-  return row ? json(row) : json({ error: "not found" }, 404);
-};
+  const site = db.prepare('SELECT 1 FROM site WHERE id = ?').get(body.site_id);
+  if (!site) return json({ error: 'site not found' }, 400);
 
-export const deleteMeter: DeleteMeterHandler = async (req, env, params) => {
-  const res = await env.DB.prepare("DELETE FROM meters WHERE id = ? AND tenant = ?").bind(params.id, tenantOf(req)).run();
-  return res.meta.changes ? json({ ok: true }) : json({ error: "not found" }, 404);
-};
+  if (body.tariff_id) {
+    const tariff = db.prepare('SELECT 1 FROM tariff WHERE id = ?').get(body.tariff_id);
+    if (!tariff) return json({ error: 'tariff not found' }, 400);
+  }
+
+  const id = crypto.randomUUID();
+  try {
+    db.prepare('INSERT INTO meter (id, serial, site_id, kind, status, tariff_id) VALUES (?, ?, ?, ?, ?, ?)').run(id, body.serial, body.site_id, body.kind, body.status, body.tariff_id ?? null);
+  } catch (e) {
+    return json({ error: (e as Error).message }, 400);
+  }
+  const row = db.prepare('SELECT * FROM meter WHERE id = ?').get(id);
+  return json(row, 201);
+}
+
+export function updateMeter(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+
+  const body = readJsonSync(c);
+  if (!body) return json({ error: 'invalid body' }, 400);
+
+  const existing = db.prepare('SELECT * FROM meter WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!existing) return json({ error: 'not found' }, 404);
+
+  const serial = body.serial ?? existing.serial;
+  const site_id = body.site_id ?? existing.site_id;
+  const kind = body.kind ?? existing.kind;
+  const status = body.status ?? existing.status;
+  const tariff_id = body.tariff_id !== undefined ? body.tariff_id : existing.tariff_id;
+
+  if (!isMeterSerial(serial)) return json({ error: 'serial must be 6-20 alphanumeric characters' }, 400);
+  if (!isUuid(site_id)) return json({ error: 'site_id must be a valid UUID' }, 400);
+  if (!isEnum(KINDS)(kind)) return json({ error: 'kind must be one of ELECTRIC, GAS, WATER, SOLAR' }, 400);
+  if (!isEnum(STATUSES)(status)) return json({ error: 'status must be one of ACTIVE, INACTIVE, FAULT' }, 400);
+  if (!isOptional(tariff_id) && !isUuid(tariff_id)) return json({ error: 'tariff_id must be a valid UUID or null' }, 400);
+
+  try {
+    db.transaction(() => {
+      if (existing.status !== status) {
+        db.prepare("INSERT INTO audit_log (id, entity_type, entity_id, field, old_value, new_value) VALUES (?, 'meter', ?, 'status', ?, ?)").run(crypto.randomUUID(), id, String(existing.status), String(status));
+      }
+      db.prepare("UPDATE meter SET serial = ?, site_id = ?, kind = ?, status = ?, tariff_id = ?, updated_at = datetime('now') WHERE id = ?").run(serial, site_id, kind, status, tariff_id ?? null, id);
+    })();
+  } catch (e) {
+    return json({ error: (e as Error).message }, 400);
+  }
+  const row = db.prepare('SELECT * FROM meter WHERE id = ?').get(id);
+  return json(row);
+}
+
+export function deleteMeter(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+  const result = db.prepare('DELETE FROM meter WHERE id = ?').run(id);
+  return result.changes > 0 ? json({ success: true }) : json({ error: 'not found' }, 404);
+}
+
+function readJsonSync(c: Context): Record<string, unknown> | null {
+  try {
+    return c.req.json() as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}

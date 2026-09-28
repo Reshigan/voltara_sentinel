@@ -1,50 +1,109 @@
-// GENERATED from the manifest. Do not edit.
-import { json, readJson, tenantOf } from "../lib/http";
-import type { Alert, Row, ListAlertsHandler, GetAlertHandler, CreateAlertHandler, UpdateAlertHandler, AcknowledgeAlertHandler } from "../types";
+import type { Context } from 'hono';
+import type { DB } from '../lib/db';
+import { json } from '../lib/http';
+import { isUuid, isEnum, isIso8601 } from '../lib/validation';
 
-const FIELDS: [string, "text" | "integer" | "real"][] = [["meter_id", "integer"], ["severity", "text"], ["message", "text"], ["opened_at", "text"], ["status", "text"], ["acknowledged_at", "text"], ["closed_at", "text"]];
-function validate(body: Partial<Alert>): string | null {
-  const b = body as Record<string, unknown>;
-  for (const [name, type] of FIELDS) {
-    const v = b[name];
-    if (v === undefined || v === null || v === "") return name + " is required";
-    if (type === "text" && typeof v !== "string") return name + " must be text";
-    if (type !== "text" && typeof v !== "number") return name + " must be a number";
-    if (type === "integer" && !Number.isInteger(v)) return name + " must be a whole number";
+const PAGE_SIZE = 50;
+const SEVERITIES = ['INFO', 'WARNING', 'CRITICAL'] as const;
+const ALERT_STATUSES = ['OPEN', 'ACKNOWLEDGED', 'CLOSED'] as const;
+
+export function listAlerts(c: Context, db: DB): Response {
+  const cursor = c.req.query('cursor');
+  const limit = Math.min(Number(c.req.query('limit') ?? PAGE_SIZE), PAGE_SIZE);
+
+  let rows: unknown[];
+  if (cursor && isUuid(cursor)) {
+    rows = db.prepare('SELECT * FROM alert WHERE id > ? ORDER BY id LIMIT ?').all(cursor, limit);
+  } else {
+    rows = db.prepare('SELECT * FROM alert ORDER BY id LIMIT ?').all(limit);
   }
-  return null;
+
+  const next = rows.length === limit ? (rows[rows.length - 1] as { id: string }).id : null;
+  return json({ items: rows, next });
 }
 
-export const listAlerts: ListAlertsHandler = async (req, env) => {
-  const { results } = await env.DB.prepare("SELECT * FROM alerts WHERE tenant = ?").bind(tenantOf(req)).all<Alert>();
-  return json(results);
-};
+export function getAlert(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+  const row = db.prepare('SELECT * FROM alert WHERE id = ?').get(id);
+  return row ? json(row) : json({ error: 'not found' }, 404);
+}
 
-export const getAlert: GetAlertHandler = async (req, env, params) => {
-  const row = await env.DB.prepare("SELECT * FROM alerts WHERE id = ? AND tenant = ?").bind(params.id, tenantOf(req)).first<Alert>();
-  return row ? json(row) : json({ error: "not found" }, 404);
-};
+export function createAlert(c: Context, db: DB): Response {
+  let body: Record<string, unknown>;
+  try { body = c.req.json() as Record<string, unknown>; }
+  catch { return json({ error: 'invalid body' }, 400); }
 
-export const createAlert: CreateAlertHandler = async (req, env) => {
-  const body = await readJson<Partial<Alert>>(req);
-  if (!body) return json({ error: "invalid body" }, 400);
-  const invalid = validate(body);
-  if (invalid) return json({ error: invalid }, 400);
-  const res = await env.DB.prepare("INSERT INTO alerts (meter_id, severity, message, opened_at, status, acknowledged_at, closed_at, tenant) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(body.meter_id ?? null, body.severity ?? null, body.message ?? null, body.opened_at ?? null, body.status ?? null, body.acknowledged_at ?? null, body.closed_at ?? null, tenantOf(req)).run();
-  const row = await env.DB.prepare("SELECT * FROM alerts WHERE id = ?").bind(res.meta.last_row_id).first<Alert>();
-  return row ? json(row) : json({ error: "insert failed" }, 500);
-};
+  if (!isUuid(body.meter_id)) return json({ error: 'meter_id must be a valid UUID' }, 400);
+  if (!isEnum(SEVERITIES)(body.severity)) return json({ error: 'severity must be one of INFO, WARNING, CRITICAL' }, 400);
+  if (typeof body.message !== 'string' || body.message.trim().length === 0) return json({ error: 'message is required' }, 400);
+  if (!isIso8601(body.opened_at)) return json({ error: 'opened_at must be a valid ISO 8601 timestamp' }, 400);
+  if (!isEnum(ALERT_STATUSES)(body.status)) return json({ error: 'status must be one of OPEN, ACKNOWLEDGED, CLOSED' }, 400);
 
-export const updateAlert: UpdateAlertHandler = async (req, env, params) => {
-  const body = await readJson<Partial<Alert>>(req);
-  if (!body) return json({ error: "invalid body" }, 400);
-  await env.DB.prepare("UPDATE alerts SET meter_id = COALESCE(?, meter_id), severity = COALESCE(?, severity), message = COALESCE(?, message), opened_at = COALESCE(?, opened_at), status = COALESCE(?, status), acknowledged_at = COALESCE(?, acknowledged_at), closed_at = COALESCE(?, closed_at) WHERE id = ? AND tenant = ?").bind(body.meter_id ?? null, body.severity ?? null, body.message ?? null, body.opened_at ?? null, body.status ?? null, body.acknowledged_at ?? null, body.closed_at ?? null, params.id, tenantOf(req)).run();
-  const row = await env.DB.prepare("SELECT * FROM alerts WHERE id = ? AND tenant = ?").bind(params.id, tenantOf(req)).first<Alert>();
-  return row ? json(row) : json({ error: "not found" }, 404);
-};
+  const meter = db.prepare('SELECT 1 FROM meter WHERE id = ?').get(body.meter_id);
+  if (!meter) return json({ error: 'meter not found' }, 400);
 
-export const acknowledgeAlert: AcknowledgeAlertHandler = async (_req, env, params) => {
-  void params;
-  const { results } = await env.DB.prepare("UPDATE alerts SET status = 'ACKNOWLEDGED', acknowledged_at = datetime('now') WHERE id = ? RETURNING *").bind(params.id).all<Row>();
-  return json(results);
-};
+  const id = crypto.randomUUID();
+  try {
+    db.prepare('INSERT INTO alert (id, meter_id, severity, message, opened_at, status) VALUES (?, ?, ?, ?, ?, ?)').run(id, body.meter_id, body.severity, body.message, body.opened_at, body.status);
+  } catch (e) {
+    return json({ error: (e as Error).message }, 400);
+  }
+  const row = db.prepare('SELECT * FROM alert WHERE id = ?').get(id);
+  return json(row, 201);
+}
+
+export function updateAlert(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+
+  let body: Record<string, unknown>;
+  try { body = c.req.json() as Record<string, unknown>; }
+  catch { return json({ error: 'invalid body' }, 400); }
+
+  const existing = db.prepare('SELECT * FROM alert WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!existing) return json({ error: 'not found' }, 404);
+
+  const status = body.status ?? existing.status;
+  if (!isEnum(ALERT_STATUSES)(status)) return json({ error: 'status must be one of OPEN, ACKNOWLEDGED, CLOSED' }, 400);
+
+  try {
+    db.transaction(() => {
+      if (existing.status !== status) {
+        db.prepare("INSERT INTO audit_log (id, entity_type, entity_id, field, old_value, new_value) VALUES (?, 'alert', ?, 'status', ?, ?)").run(crypto.randomUUID(), id, String(existing.status), String(status));
+      }
+      db.prepare("UPDATE alert SET status = ? WHERE id = ?").run(status, id);
+    })();
+  } catch (e) {
+    return json({ error: (e as Error).message }, 400);
+  }
+  const row = db.prepare('SELECT * FROM alert WHERE id = ?').get(id);
+  return json(row);
+}
+
+export function acknowledgeAlert(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+
+  const existing = db.prepare('SELECT * FROM alert WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+  if (!existing) return json({ error: 'not found' }, 404);
+
+  try {
+    db.transaction(() => {
+      db.prepare("INSERT INTO audit_log (id, entity_type, entity_id, field, old_value, new_value) VALUES (?, 'alert', ?, 'status', ?, 'ACKNOWLEDGED')").run(crypto.randomUUID(), id, String(existing.status));
+      db.prepare("UPDATE alert SET status = 'ACKNOWLEDGED', acknowledged_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+    })();
+  } catch (e) {
+    return json({ error: (e as Error).message }, 400);
+  }
+
+  const row = db.prepare('SELECT * FROM alert WHERE id = ?').get(id);
+  return json(row);
+}
+
+export function deleteAlert(c: Context, db: DB): Response {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return json({ error: 'invalid id' }, 400);
+  const result = db.prepare('DELETE FROM alert WHERE id = ?').run(id);
+  return result.changes > 0 ? json({ success: true }) : json({ error: 'not found' }, 404);
+}

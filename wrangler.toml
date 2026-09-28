@@ -1,0 +1,17 @@
+name = "voltara"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# D1 SQLite-at-the-edge database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "voltara-db"
+database_id = "voltara-db"
+
+# Static frontend assets served through the ASSETS binding
+[assets]
+directory = "public/"
+
+# Optional PORT var retained for local development parity (not used by Workers runtime)
+[vars]
+PORT = "8080"
